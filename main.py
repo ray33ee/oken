@@ -14,11 +14,13 @@ import inverses
 import zipfile
 import logging
 import sys
+import os
+import shutil
+import wget
+
 
 logging.basicConfig(level=logging.DEBUG, stream=sys.stdout)
 
-
-with zipfile.ZipFile("spam3.zip", "w") as fh:
-    fh.write("eggs.txt")
+wget.download("https://raw.githubusercontent.com/ray33ee/Project-Mylang/main/main.py", out="test.txt")
 
 print(inverses.inverse_list)
