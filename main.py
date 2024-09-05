@@ -1,3 +1,4 @@
+import tempfile
 
 # Override tempfile._mkstemp_inner and tempfile.mkdtemp
 # Override builtins.open
@@ -7,6 +8,7 @@
 # Override shutil.rmtree
 # Add logging and debug logging to builtins.open so we can see what and when we open
 
+# Import this first to modify other modules before loading
 import overrides
 
 
@@ -21,6 +23,8 @@ import wget
 
 logging.basicConfig(level=logging.DEBUG, stream=sys.stdout)
 
-wget.download("https://raw.githubusercontent.com/ray33ee/Project-Mylang/main/main.py", out="test.txt")
+with tempfile.TemporaryDirectory() as t:
+    pass
+
 
 print(inverses.inverse_list)

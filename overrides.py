@@ -4,19 +4,134 @@ import os
 import builtins
 import io
 import shutil
+import tempfile
 
 import inverses
 import logging
 
+_temporary_directories = set()
+
+_temporary_files = set()
+
 logger = logging.getLogger(__name__)
 
-_created_tmp_paths = {}
+suspend_inverses = False
 
+
+def stop_inverses():
+    global suspend_inverses
+
+    suspend_inverses = True
+
+
+def resume_inverses():
+    global suspend_inverses
+
+    suspend_inverses = False
+
+# Returns true of path is a child directory of parent
+def is_subdir(path, parent):
+    return os.path.commonpath([parent, path]) == parent
+
+# Every time a directory or file is created with tempfile, we add the parent
+def resolve_tmp_root(path):
+    tmp_dirs = tempfile._candidate_tempdir_list()
+
+    for tmp_dir in tmp_dirs:
+        pass
+
+
+_mkdtemp = tempfile.mkdtemp
 def _new_mkdtemp(suffix=None, prefix=None, dir=None):
-    pass
 
-def _new_mkstemp_inner(dir, pre, suf, flags, output_type):
-    pass
+    stop_inverses()
+
+    d = _mkdtemp(suffix, prefix, dir)
+
+    resume_inverses()
+
+    logger.debug(f"Temporary directory made at {d}")
+
+    _temporary_directories.add(d)
+
+    return d
+
+tempfile.mkdtemp = _new_mkdtemp
+
+
+mkdtemp_ = tempfile.mkdtemp
+def _new_mkdtemp(suffix=None, prefix=None, dir=None):
+
+    stop_inverses()
+
+    d = _mkdtemp(suffix, prefix, dir)
+
+    resume_inverses()
+
+    logger.debug(f"mkdtemp Temporary directory made at {d}")
+
+    _temporary_directories.add(d)
+
+    return d
+
+tempfile.mkdtemp = _new_mkdtemp
+
+
+_mkstemp_inner = tempfile.mkstemp
+def _new_mkstemp(suffix=None, prefix=None, dir=None, text=False):
+
+    stop_inverses()
+
+    fd, file = _mkstemp_inner(suffix, prefix, dir, text)
+
+    resume_inverses()
+
+    logger.debug(f"mkstemp Temporary File Created '{file}'")
+
+    return fd, file
+
+tempfile.mkstemp = _new_mkstemp
+
+
+_TemporaryFile = tempfile.TemporaryFile
+def _new_TemporaryFile(mode='w+b', buffering=-1, encoding=None, newline=None, suffix=None, prefix=None, dir=None, errors=None):
+
+    stop_inverses()
+
+    file = _TemporaryFile(mode=mode, buffering=buffering, encoding=encoding, newline=newline, suffix=suffix, prefix=prefix, dir=dir, errors=errors)
+
+    resume_inverses()
+
+    logger.debug(f"Temporary File Created '{file}'")
+
+    return file
+
+tempfile.TemporaryFile = _new_TemporaryFile
+tempfile.NamedTemporaryFile = _new_TemporaryFile
+
+
+
+_TemporaryDirectory = tempfile.TemporaryDirectory
+
+class _New_TemporaryDirectory:
+    def __init__(self, suffix=None, prefix=None, dir=None, ignore_cleanup_errors=False, *, delete=True):
+        stop_inverses()
+        self.td = _TemporaryDirectory(suffix=suffix, prefix=prefix, dir=dir, ignore_cleanup_errors=ignore_cleanup_errors, delete=delete)
+        resume_inverses()
+
+    def __repr__(self):
+        return repr(self.td)
+
+    def __enter__(self):
+        return self.td.__enter__()
+
+    def __exit__(self, exc, value, tb):
+        stop_inverses()
+        self.td.__exit__(exc, value, tb)
+        resume_inverses()
+
+
+tempfile.TemporaryDirectory = _New_TemporaryDirectory
 
 
 def _is_temp_path(path):
@@ -32,7 +147,7 @@ def _is_temp_path(path):
 
 _open = builtins.open
 
-def _new_open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, closefd=True, openr=None):
+def _new_open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, closefd=True, opener=None):
     logger.debug(f"Override Open({repr(file)}, {repr(mode)})...")
 
     # Check if the path is a temp path (use _is_temp_path)
@@ -40,7 +155,7 @@ def _new_open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=
     # Check if the mode creates a new file or not (see if the file existed before open is called)
     already_exists = os.path.isfile(file)
 
-    fh = _open(file, mode, buffering, encoding, errors, newline, closefd, openr)
+    fh = _open(file, mode, buffering, encoding, errors, newline, closefd, opener)
 
     logger.debug(f"Success.")
 
@@ -48,8 +163,9 @@ def _new_open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=
 
     is_temp = _is_temp_path(file)
 
+
     # If the file is writable and not temporary, produce an inverse
-    if writable and not is_temp:
+    if writable and not is_temp and not suspend_inverses:
         if already_exists:
             # If the file already exists then the inverse is to restore the version before the changes
             fh.close()
@@ -60,11 +176,53 @@ def _new_open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=
         else:
             # If a new file is created, the inverse is to delete
             inverses.inverse_list.append(inverses.Remove(file))
+    else:
+        logger.debug(f"File is opened for reading or temporary, so no inverse is created")
 
     return fh
 
 builtins.open = _new_open
 io.open = _new_open
+
+
+
+_os_open = tempfile._os.open
+
+def _new_os_open(path, flags, mode=0o777, dir_fd=None):
+    logger.debug(f"Override (os) Open({repr(path)}, {repr(mode)})...")
+
+    # Check if the path is a temp path (use _is_temp_path)
+    # Check if the mode is read only (use is not writable())
+    # Check if the mode creates a new file or not (see if the file existed before open is called)
+    already_exists = os.path.isfile(path)
+
+    fh = _os_open(path, flags, mode, dir_fd=dir_fd)
+
+    logger.debug(f"Success.")
+
+    writable = (flags == os.O_WRONLY) or (flags == os.O_RDWR)
+
+    is_temp = _is_temp_path(path)
+
+
+    # If the file is writable and not temporary, produce an inverse
+    if writable and not is_temp and not suspend_inverses:
+        if already_exists:
+            # If the file already exists then the inverse is to restore the version before the changes
+            fh.close()
+
+            inverses.inverse_list.append(inverses.RestoreFile(path))
+
+            fh = _os_open(path, flags, mode, dir_fd=dir_fd)
+        else:
+            # If a new file is created, the inverse is to delete
+            inverses.inverse_list.append(inverses.Remove(path))
+    else:
+        logger.debug(f"File is opened for reading or temporary, so no inverse is created")
+
+    return fh
+
+tempfile._os.open = _new_os_open
 
 
 _mkdir = os.mkdir
@@ -76,7 +234,12 @@ def _new_mkdir(path, mode=0o777, dir_fd=None):
 
     logger.debug(f"Success.")
 
-    inverses.inverse_list.append(inverses.Rmdir(path))
+    logger.debug(suspend_inverses)
+
+    if not suspend_inverses:
+        inverses.inverse_list.append(inverses.Rmdir(path))
+    else:
+        logger.debug(f"Folder is temporary, so no inverse is created")
 
     return r
 
@@ -93,7 +256,10 @@ def _new_remove(path, dir_fd=None):
 
     logger.debug(f"Success.")
 
-    inverses.inverse_list.append(restore)
+    if not suspend_inverses:
+        inverses.inverse_list.append(restore)
+    else:
+        logger.debug(f"Folder/file is temporary, so no inverse is created")
 
     return r
 
@@ -109,7 +275,10 @@ def _new_rmdir(path, dir_fd=None):
 
     logger.debug(f"Success.")
 
-    inverses.inverse_list.append(inverses.Mkdir(path))
+    if not suspend_inverses:
+        inverses.inverse_list.append(inverses.Mkdir(path))
+    else:
+        logger.debug(f"Folder is temporary, so no inverse is created")
 
     return r
 
@@ -134,11 +303,13 @@ def _new_copyfile(src, dst, follow_symlinks=True):
 
     logger.debug(f"Success.")
 
-    if not is_temp:
+    if not is_temp and not suspend_inverses:
         if already_exists:
             inverses.inverse_list.append(inverses.RestoreFile(dst))
         else:
             inverses.inverse_list.append(inverses.Remove(dst))
+    else:
+        logger.debug(f"File is temporary, so no inverse is created")
 
     builtins.open = _new_open
     io.open = _new_open
@@ -162,11 +333,13 @@ def _new_copy2(src, dst, follow_symlinks=True):
 
     logger.debug(f"Success.")
 
-    if not is_temp:
+    if not is_temp and not suspend_inverses:
         if already_exists:
             inverses.inverse_list.append(inverses.RestoreFile(dst))
         else:
             inverses.inverse_list.append(inverses.Remove(dst))
+    else:
+        logger.debug(f"File is temporary, so no inverse is created")
 
     return r
 
@@ -181,9 +354,10 @@ def _new_rename(src, dst, src_dir_fd=None, dst_dir_fd=None):
 
     logger.debug(f"Success.")
 
-    print("noe")
-
-    inverses.inverse_list.append(inverses.Move(dst, src))
+    if not suspend_inverses:
+        inverses.inverse_list.append(inverses.Move(dst, src))
+    else:
+        logger.debug(f"File/Folder is temporary, so no inverse is created")
 
     return r
 
