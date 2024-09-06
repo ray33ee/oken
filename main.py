@@ -20,11 +20,13 @@ import os
 import shutil
 import wget
 
+import tempfile
 
 logging.basicConfig(level=logging.DEBUG, stream=sys.stdout)
 
-with tempfile.TemporaryDirectory() as t:
-    pass
-
+with tempfile.TemporaryFile("w") as fh:
+    fh.write("hello")
 
 print(inverses.inverse_list)
+
+print(os.path.abspath("%appdata%"))

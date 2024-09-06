@@ -29,17 +29,37 @@ def resume_inverses():
 
     suspend_inverses = False
 
+
+
+def _is_temp_path(path):
+
+    # First if the path is a file, is it one of the temporary files created
+    if os.path.isfile(path):
+        if path in _temporary_files:
+            return True
+
+    # Next check to see if the path is a decendant of any of the temporary directories
+    for tmp_dir in _temporary_directories:
+        if is_subdir(path, tmp_dir):
+            return True
+
+    # If the above checks fail, we assume the path does not represent a temporary path
+    return False
+
 # Returns true of path is a child directory of parent
 def is_subdir(path, parent):
-    return os.path.commonpath([parent, path]) == parent
+    return os.path.commonpath([parent, os.path.abspath(path)]) == parent
 
-# Every time a directory or file is created with tempfile, we add the parent
-def resolve_tmp_root(path):
-    tmp_dirs = tempfile._candidate_tempdir_list()
+# When we create temporary files, add them to the list of temporary locations, and check current locations to see if
+# they are still live
+def add_and_check(path):
 
-    for tmp_dir in tmp_dirs:
-        pass
+    absolute = os.path.abspath(path)
 
+    if os.path.isfile(absolute):
+        _temporary_files.add(absolute)
+    else:
+        _temporary_directories.add(absolute)
 
 _mkdtemp = tempfile.mkdtemp
 def _new_mkdtemp(suffix=None, prefix=None, dir=None):
@@ -51,6 +71,8 @@ def _new_mkdtemp(suffix=None, prefix=None, dir=None):
     resume_inverses()
 
     logger.debug(f"Temporary directory made at {d}")
+
+    _temporary_directories.add(d)
 
     _temporary_directories.add(d)
 
@@ -134,17 +156,6 @@ class _New_TemporaryDirectory:
 tempfile.TemporaryDirectory = _New_TemporaryDirectory
 
 
-def _is_temp_path(path):
-    # Returns if the path is in a temporary folder. If true, no inverses are used to destroy any created files in the target machine
-
-    # First we see if the entry is in _created_tmp_paths
-
-    # Then we see if the entry is in a few other locations that can contain temporary folders under windows (see _candidate_tempdir_list in tempfile for a list of locations) :
-
-    # If all attempts fail, we assume the path is not in a temporary location
-
-    return False
-
 _open = builtins.open
 
 def _new_open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, closefd=True, opener=None):
@@ -172,7 +183,7 @@ def _new_open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=
 
             inverses.inverse_list.append(inverses.RestoreFile(file))
 
-            fh = _open(file, mode, buffering, encoding, errors, newline, closefd, openr)
+            fh = _open(file, mode, buffering, encoding, errors, newline, closefd, opener)
         else:
             # If a new file is created, the inverse is to delete
             inverses.inverse_list.append(inverses.Remove(file))
